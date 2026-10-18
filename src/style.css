@@ -946,6 +946,54 @@ body.title-mode #game {
   background: linear-gradient(90deg, rgba(211, 178, 111, 0.48), transparent);
 }
 
+.zone-weather {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 1px;
+  color: rgba(174, 196, 214, 0.66);
+  font-family: var(--display);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+  animation: weatherIn 0.7s var(--ease) both;
+}
+
+.zone-weather .weather-icon {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+.zone-weather[data-tone="storm"] {
+  color: rgba(168, 189, 228, 0.78);
+}
+
+.zone-weather[data-tone="rain"] {
+  color: rgba(150, 186, 214, 0.72);
+}
+
+.zone-weather[data-tone="mist"] {
+  color: rgba(198, 208, 210, 0.62);
+}
+
+.zone-weather[data-tone="ash"] {
+  color: rgba(201, 190, 172, 0.7);
+}
+
+@keyframes weatherIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .minimap-cluster {
   position: absolute;
   top: 18px;

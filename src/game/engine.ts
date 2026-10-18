@@ -45,6 +45,40 @@ import type {
 
 export type ZoneKey = keyof typeof ZONES;
 export type ToastTone = "gold" | "danger" | "quest" | "loot" | "system";
+export type WeatherKind = "clear" | "rain" | "storm" | "mist" | "ash";
+
+export const WEATHER_META: Record<WeatherKind, { label: string; icon: string }> = {
+  clear: { label: "Fair skies", icon: "☀" },
+  rain: { label: "Rain", icon: "☂" },
+  storm: { label: "Storm", icon: "ϟ" },
+  mist: { label: "Mist", icon: "≋" },
+  ash: { label: "Ashfall", icon: "※" },
+};
+
+// Weighted weather tables per zone. The reliquary is indoors and stays clear.
+const WEATHER_BY_ZONE: Record<ZoneKey, [WeatherKind, number][]> = {
+  hub: [
+    ["clear", 5],
+    ["rain", 3],
+    ["mist", 2],
+  ],
+  reach: [
+    ["clear", 4],
+    ["rain", 4],
+    ["storm", 2.5],
+  ],
+  gloam: [
+    ["mist", 5],
+    ["rain", 2.5],
+    ["clear", 2.5],
+  ],
+  ruins: [
+    ["ash", 4],
+    ["clear", 3],
+    ["storm", 2],
+  ],
+  dungeon: [["clear", 1]],
+};
 
 export interface GameEvents {
   toast(title: string, detail?: string, tone?: ToastTone): void;
@@ -158,6 +192,14 @@ export class EverwakeGame {
   time = 0;
   areaTitle = { text: "", sub: "", time: 0 };
   events: GameEvents = NO_EVENTS;
+  weather: {
+    kind: WeatherKind;
+    prev: WeatherKind;
+    blend: number;
+    timer: number;
+    bolt: number;
+    boltSeed: number;
+  } = { kind: "clear", prev: "clear", blend: 1, timer: 30, bolt: 0, boltSeed: 0.42 };
 
   private keys = new Set<string>();
   private mouse: Vec = { x: 0, y: 0 };
@@ -177,6 +219,8 @@ export class EverwakeGame {
     color?: string;
   }[] = [];
   private lastDeadCheck = 0;
+  private lightningTimer = 7;
+  private weatherPrimed = true;
 
   constructor() {
     this.player = this.createPlayer("Wanderer", "vanguard");
@@ -225,6 +269,9 @@ export class EverwakeGame {
     this.pendingAbility = null;
     this.pendingInteractNpc = null;
     this.time = 0;
+    this.weather = { kind: "clear", prev: "clear", blend: 1, timer: 18, bolt: 0, boltSeed: Math.random() };
+    this.weatherPrimed = true;
+    this.lightningTimer = 7;
     this.refreshQuestAvailability();
     this.setAreaTitle("Wayfarer's Rest", "The last warm fire before the wilds");
     this.addChat("system", "", `Welcome to Everwake, ${cleanName}. The world has been waiting.`);
@@ -419,6 +466,7 @@ export class EverwakeGame {
     this.updateChatSim(step);
     this.updateOnline(step);
     this.updateAmbient(step);
+    this.updateWeather(step);
 
     if (this.mode === "title") {
       this.updateBots(step);
@@ -453,6 +501,101 @@ export class EverwakeGame {
     this.areaTitle.time = Math.max(0, this.areaTitle.time - dt);
   }
 
+  /** 0..1 presence of a given weather state, crossfading between prev and kind. */
+  weatherStrength(kind: WeatherKind): number {
+    const w = this.weather;
+    let value = 0;
+    if (w.kind === kind) value += w.blend;
+    if (w.prev === kind && w.kind !== kind) value += 1 - w.blend;
+    return clamp(value, 0, 1);
+  }
+
+  private weatherResourceMultiplier(): number {
+    const wet = this.weatherStrength("rain") + this.weatherStrength("storm");
+    return wet > 0 ? 1 + 0.35 * Math.min(1, wet) : 1;
+  }
+
+  private updateWeather(dt: number): void {
+    const w = this.weather;
+    w.bolt = Math.max(0, w.bolt - dt);
+    if (w.blend < 1) w.blend = Math.min(1, w.blend + dt / 5);
+
+    if (this.scene === "dungeon") {
+      // Indoors the sky does not reach you.
+      if (w.kind !== "clear") {
+        w.prev = w.kind;
+        w.kind = "clear";
+        w.blend = 0;
+      }
+      w.timer = 12;
+      return;
+    }
+
+    w.timer -= dt;
+    if (w.timer <= 0) {
+      const next = this.pickWeather();
+      if (next !== w.kind) {
+        w.prev = w.kind;
+        w.kind = next;
+        w.blend = 0;
+        if (this.mode === "playing") this.announceWeather(next);
+      }
+      w.timer = randomRange(42, 84);
+    }
+
+    const storm = this.weatherStrength("storm");
+    if (storm > 0.5 && this.mode === "playing") {
+      this.lightningTimer -= dt * storm;
+      if (this.lightningTimer <= 0) {
+        this.lightningTimer = randomRange(6, 15);
+        w.bolt = 0.5;
+        w.boltSeed = Math.random();
+        this.events.flash("#dce9ff", 0.26);
+        this.events.shake(5);
+      }
+    } else if (this.lightningTimer < 3) {
+      this.lightningTimer = 3;
+    }
+  }
+
+  private pickWeather(): WeatherKind {
+    const table = WEATHER_BY_ZONE[this.zoneKey] ?? WEATHER_BY_ZONE.hub;
+    let options = table.filter(([kind]) => kind !== "clear");
+    if (this.weatherPrimed || options.length === 0) {
+      this.weatherPrimed = false;
+    } else {
+      options = table;
+    }
+    const total = options.reduce((sum, [, weight]) => sum + weight, 0);
+    let roll = Math.random() * total;
+    for (const [kind, weight] of options) {
+      roll -= weight;
+      if (roll <= 0) return kind;
+    }
+    return options[options.length - 1][0];
+  }
+
+  private announceWeather(kind: WeatherKind): void {
+    const resource = this.player.resourceName;
+    const copy: Record<WeatherKind, { title: string; detail: string; tone: ToastTone }> = {
+      clear: { title: "The sky clears", detail: "Sunlight finds the old road once more.", tone: "system" },
+      rain: {
+        title: "Rain moves in",
+        detail: `Steady and warm. ${resource} recovery +35% while it falls.`,
+        tone: "quest",
+      },
+      storm: {
+        title: "A storm rolls over",
+        detail: `Thunder walks the horizon. ${resource} recovery +35%.`,
+        tone: "danger",
+      },
+      mist: { title: "Mist settles", detail: "The world draws a curtain around itself.", tone: "quest" },
+      ash: { title: "Ashfall begins", detail: "The dead kingdoms snow again.", tone: "quest" },
+    };
+    const entry = copy[kind];
+    this.events.toast(entry.title, entry.detail, entry.tone);
+  }
+
   private setAreaTitle(text: string, sub: string): void {
     this.areaTitle = { text, sub, time: 4.2 };
     this.events.sound("area");
@@ -482,15 +625,16 @@ export class EverwakeGame {
       const regen = inCombat ? player.maxHp * 0.001 : player.maxHp * 0.014;
       player.hp = Math.min(player.maxHp, player.hp + regen * dt);
     }
+    const weatherMult = this.scene === "world" ? this.weatherResourceMultiplier() : 1;
     if (player.classId === "vanguard") {
       player.resource = clamp(
-        player.resource + (inCombat ? 0.7 : 2.5) * dt,
+        player.resource + (inCombat ? 0.7 : 2.5) * dt * weatherMult,
         0,
         player.maxResource,
       );
     } else {
       player.resource = clamp(
-        player.resource + (inCombat ? 2.6 : 9) * dt,
+        player.resource + (inCombat ? 2.6 : 9) * dt * weatherMult,
         0,
         player.maxResource,
       );

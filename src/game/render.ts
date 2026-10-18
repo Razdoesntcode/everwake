@@ -1042,6 +1042,8 @@ export class Renderer {
   private flashColor = "rgba(255,255,255,0.2)";
   private flashAlpha = 0;
   private resizeHandler: () => void;
+  private rainDrops: { x: number; y: number; speed: number; len: number; alpha: number; width: number }[] = [];
+  private ashFlakes: { x: number; y: number; speed: number; phase: number; size: number; alpha: number }[] = [];
 
   constructor(canvas: HTMLCanvasElement, game: EverwakeGame) {
     this.canvas = canvas;
@@ -1149,6 +1151,7 @@ export class Renderer {
     this.drawFloaters(ctx);
     ctx.restore();
 
+    this.drawWeather(ctx, dt);
     this.drawAtmosphere(ctx);
     if (this.flashAlpha > 0) {
       ctx.save();
@@ -2610,6 +2613,136 @@ export class Renderer {
     }
   }
 
+  private ensureWeatherParticles(): void {
+    if (this.rainDrops.length === 0) {
+      for (let i = 0; i < 260; i += 1) {
+        this.rainDrops.push({
+          x: Math.random(),
+          y: Math.random(),
+          speed: 780 + Math.random() * 460,
+          len: 14 + Math.random() * 22,
+          alpha: 0.16 + Math.random() * 0.3,
+          width: Math.random() < 0.25 ? 1.6 : 1.1,
+        });
+      }
+    }
+    if (this.ashFlakes.length === 0) {
+      for (let i = 0; i < 170; i += 1) {
+        this.ashFlakes.push({
+          x: Math.random(),
+          y: Math.random(),
+          speed: 24 + Math.random() * 44,
+          phase: Math.random() * TAU,
+          size: 1 + Math.random() * 2.4,
+          alpha: 0.22 + Math.random() * 0.38,
+        });
+      }
+    }
+  }
+
+  private drawWeather(ctx: CanvasRenderingContext2D, dt: number): void {
+    const rain = this.game.weatherStrength("rain");
+    const storm = this.game.weatherStrength("storm");
+    const ash = this.game.weatherStrength("ash");
+    const rainStrength = Math.min(1, rain + storm * 1.2);
+    this.ensureWeatherParticles();
+
+    if (rainStrength > 0.01) {
+      const count = Math.ceil(this.rainDrops.length * Math.min(1, rainStrength));
+      const windX = 0.14 + storm * 0.3;
+      ctx.save();
+      ctx.lineCap = "round";
+      for (let i = 0; i < count; i += 1) {
+        const drop = this.rainDrops[i];
+        drop.y += (drop.speed * (1 + storm * 0.35) * dt) / Math.max(1, this.height);
+        drop.x += (drop.speed * windX * dt) / Math.max(1, this.width);
+        if (drop.y > 1.05) {
+          drop.y -= 1.15;
+          drop.x = Math.random();
+        }
+        if (drop.x > 1.05) drop.x -= 1.15;
+        const x = drop.x * this.width;
+        const y = drop.y * this.height;
+        const len = drop.len * (1 + storm * 0.35);
+        ctx.strokeStyle = `rgba(174, 202, 230, ${drop.alpha * rainStrength})`;
+        ctx.lineWidth = drop.width;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - len * windX, y - len);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    if (ash > 0.01) {
+      const count = Math.ceil(this.ashFlakes.length * ash);
+      ctx.save();
+      for (let i = 0; i < count; i += 1) {
+        const flake = this.ashFlakes[i];
+        flake.phase += dt * 0.7;
+        flake.y += (flake.speed * dt) / Math.max(1, this.height);
+        flake.x += ((Math.sin(flake.phase) * 16 + 14) * dt) / Math.max(1, this.width);
+        if (flake.y > 1.04) {
+          flake.y -= 1.08;
+          flake.x = Math.random();
+        }
+        if (flake.x > 1.04) flake.x -= 1.08;
+        ctx.fillStyle = `rgba(163, 157, 144, ${flake.alpha * ash})`;
+        ctx.beginPath();
+        ctx.ellipse(
+          flake.x * this.width,
+          flake.y * this.height,
+          flake.size,
+          flake.size * 0.8,
+          flake.phase,
+          0,
+          TAU,
+        );
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    const weather = this.game.weather;
+    if (weather.bolt > 0) {
+      const life = clamp(weather.bolt / 0.5, 0, 1);
+      const rng = mulberry32(Math.floor(weather.boltSeed * 100000) + 7);
+      const startX = (0.12 + weather.boltSeed * 0.76) * this.width;
+      const segments = 9;
+      const endY = this.height * (0.5 + rng() * 0.3);
+      const stepY = (endY + 12) / segments;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, life * 1.5);
+      ctx.strokeStyle = "#e9f1ff";
+      ctx.shadowColor = "#bcd4ff";
+      ctx.shadowBlur = 22;
+      ctx.lineWidth = 2.6;
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      let px = startX;
+      ctx.moveTo(px, -12);
+      for (let s = 1; s <= segments; s += 1) {
+        px += (rng() - 0.5) * 92;
+        ctx.lineTo(px, -12 + stepY * s);
+      }
+      ctx.stroke();
+      // A short fork branching off the main bolt.
+      ctx.globalAlpha *= 0.55;
+      ctx.lineWidth = 1.6;
+      let fx = startX + (rng() - 0.5) * 40;
+      let fy = endY * (0.35 + rng() * 0.2);
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      for (let s = 0; s < 3; s += 1) {
+        fx += (rng() - 0.3) * 70;
+        fy += 34 + rng() * 30;
+        ctx.lineTo(fx, fy);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   private drawAtmosphere(ctx: CanvasRenderingContext2D): void {
     ctx.save();
     if (this.game.scene === "world") {
@@ -2618,6 +2751,26 @@ export class Renderer {
         ctx.fillRect(0, 0, this.width, this.height);
       } else if (this.game.zoneKey === "ruins") {
         ctx.fillStyle = "rgba(82, 63, 44, 0.07)";
+        ctx.fillRect(0, 0, this.width, this.height);
+      }
+      const stormTint = this.game.weatherStrength("storm");
+      const rainTint = this.game.weatherStrength("rain");
+      const ashTint = this.game.weatherStrength("ash");
+      const mistTint = this.game.weatherStrength("mist");
+      if (stormTint > 0) {
+        ctx.fillStyle = `rgba(16, 24, 42, ${0.17 * stormTint})`;
+        ctx.fillRect(0, 0, this.width, this.height);
+      }
+      if (rainTint > 0) {
+        ctx.fillStyle = `rgba(26, 40, 56, ${0.11 * rainTint})`;
+        ctx.fillRect(0, 0, this.width, this.height);
+      }
+      if (ashTint > 0) {
+        ctx.fillStyle = `rgba(64, 58, 52, ${0.13 * ashTint})`;
+        ctx.fillRect(0, 0, this.width, this.height);
+      }
+      if (mistTint > 0) {
+        ctx.fillStyle = `rgba(116, 132, 138, ${0.11 * mistTint})`;
         ctx.fillRect(0, 0, this.width, this.height);
       }
       const fogTime = this.time * 9;
@@ -2633,6 +2786,21 @@ export class Renderer {
         ctx.beginPath();
         ctx.arc(x, y, 330, 0, TAU);
         ctx.fill();
+      }
+      if (mistTint > 0) {
+        ctx.globalCompositeOperation = "screen";
+        for (let i = 0; i < 3; i += 1) {
+          const x = ((this.time * 30 + i * 640) % (this.width + 760)) - 380;
+          const y = this.height * (0.28 + 0.24 * i) + Math.sin(this.time * 0.14 + i * 2.1) * 54;
+          const mist = ctx.createRadialGradient(x, y, 40, x, y, 430);
+          mist.addColorStop(0, `rgba(181, 193, 199, ${0.07 * mistTint})`);
+          mist.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.fillStyle = mist;
+          ctx.beginPath();
+          ctx.arc(x, y, 430, 0, TAU);
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = "source-over";
       }
       ctx.globalCompositeOperation = "source-over";
     } else {

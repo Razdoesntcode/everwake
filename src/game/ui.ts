@@ -1,5 +1,5 @@
 import { BOTS, CLASSES, ITEMS, QUESTS, VENDOR_STOCK, ZONES } from "./data";
-import { EverwakeGame, rarityColor } from "./engine";
+import { EverwakeGame, rarityColor, WEATHER_META } from "./engine";
 import { Renderer } from "./render";
 import { AudioEngine } from "./audio";
 import type { ClassId, ItemDef, QuestDef, QuestStatus } from "./types";
@@ -84,6 +84,8 @@ export class UI {
   private targetMeta!: HTMLElement;
   private zoneName!: HTMLElement;
   private zoneOnline!: HTMLElement;
+  private zoneWeather!: HTMLElement;
+  private lastWeatherSignature = "";
   private minimap!: HTMLCanvasElement;
   private minimapZone!: HTMLElement;
   private minimapRift!: HTMLElement;
@@ -131,6 +133,10 @@ export class UI {
       openVendor: () => this.openVendor(),
     });
     this.selectClass("vanguard");
+    // Browsers need one gesture before any sound; title-screen music waits on it.
+    const unlockAudio = (): void => this.audio.unlock();
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+    window.addEventListener("keydown", unlockAudio, { once: true });
   }
 
   private build(): void {
@@ -235,6 +241,7 @@ export class UI {
             <span id="zone-name">Wayfarer's Rest</span>
             <span class="zone-rule"></span>
           </div>
+          <div class="zone-weather hidden" id="zone-weather"></div>
         </div>
 
         <div class="minimap-cluster">
@@ -353,6 +360,7 @@ export class UI {
     this.targetMeta = this.require("target-meta");
     this.zoneName = this.require("zone-name");
     this.zoneOnline = this.require("online-count");
+    this.zoneWeather = this.require("zone-weather");
     this.minimap = this.require("minimap");
     this.minimapZone = this.require("minimap-zone");
     this.minimapRift = this.require("rift-indicator");
@@ -618,6 +626,7 @@ export class UI {
 
   update(dt: number): void {
     this.lastMinimapUpdate += dt;
+    this.audio.setZone(this.game.mode === "title" ? "title" : this.game.zoneKey);
     if (this.game.mode === "title") {
       this.lastTitleUpdate += dt;
       if (this.lastTitleUpdate > 0.8) {
@@ -675,6 +684,23 @@ export class UI {
     this.lowHealth.style.opacity = String(healthRatio < 0.3 ? (0.3 - healthRatio) * 2.2 : 0);
     this.zoneName.textContent = ZONES[this.game.zoneKey].name;
     this.zoneOnline.textContent = `${this.game.online.toLocaleString()} ONLINE`;
+
+    const weather = this.game.weather;
+    const dominant = weather.blend >= 0.5 ? weather.kind : weather.prev;
+    const weatherSignature = dominant === "clear" ? "" : dominant;
+    if (weatherSignature !== this.lastWeatherSignature) {
+      this.lastWeatherSignature = weatherSignature;
+      if (weatherSignature === "") {
+        this.zoneWeather.classList.add("hidden");
+        this.zoneWeather.removeAttribute("data-tone");
+        this.zoneWeather.innerHTML = "";
+      } else {
+        const meta = WEATHER_META[dominant];
+        this.zoneWeather.innerHTML = `<span class="weather-icon">${meta.icon}</span><span>${meta.label}</span>`;
+        this.zoneWeather.dataset.tone = dominant;
+        this.zoneWeather.classList.remove("hidden");
+      }
+    }
 
     const buffSignature = player.buffs.map((buff) => `${buff.id}:${Math.ceil(buff.time)}`).join("|");
     if (buffSignature !== this.lastBuffSignature) {
@@ -1392,6 +1418,7 @@ export class UI {
 
   dispose(): void {
     this.audio.setAmbientIntensity(0);
+    this.audio.dispose();
   }
 
   setVendorOpen(): void {
