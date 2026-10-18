@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vite/
+*.local
+.DS_Store
+Thumbs.db
+
+# Local backup snapshots are regenerable and would bloat history.
+backups/*.zip
+
+# Logs
+*.log
